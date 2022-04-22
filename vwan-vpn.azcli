@@ -8,7 +8,7 @@ az group create -n $rg -l $loc
 # create virtual wan
 az network vwan create -g $rg -n vwanvpn --branch-to-branch-traffic true --location $loc --type Standard
 
-# az network vhub create -g $rg --name hubeast --address-prefix 10.0.0.0/24 --vwan vwanvpn --location $loc --sku Standard
+az network vhub create -g $rg --name hubeast --address-prefix 10.0.0.0/24 --vwan vwanvpn --location $loc --sku Standard
 az network vhub create -g $rg --name hubwest --address-prefix 10.0.1.0/24 --vwan vwanvpn --location $loc --sku Standard
 
 # create VPN gateways in each Virtual WAN Hub
@@ -39,15 +39,63 @@ az network vnet create --address-prefixes 10.11.0.0/16 -n spoke2 -g $rg --subnet
 az network vhub connection create -n spoke1conn --remote-vnet spoke1 -g $rg --vhub-name hubeast
 az network vhub connection create -n spoke2conn --remote-vnet spoke2 -g $rg --vhub-name hubwest
 
+prState=''
+rtState=''
+while [[ $prState != 'Succeeded' ]];
+do
+    prState=$(az network vhub show -g vwan-vpn -n hubeast --query 'provisioningState' -o tsv)
+    echo "hubeast provisioningState="$prState
+    sleep 5
+done
+
+while [[ $rtState != 'Provisioned' ]];
+do
+    rtState=$(az network vhub show -g vwan-vpn -n hubeast --query 'routingState' -o tsv)
+    echo "hubeast routingState="$rtState
+    sleep 5
+done
+
+prState=''
+while [[ $prState != 'Succeeded' ]];
+do
+    prState=$(az network vnet-gateway show -g vwan-vpn -n branchEastGW --query provisioningState -o tsv)
+    echo "branchEastGW provisioningState="$prState
+    sleep 5
+done
+
 # get bgp peering and public ip addresses of VPN GW and VWAN to set up connection
-bgp1=$(az network vnet-gateway show -n branchEastGW -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses' -o tsv)
+bgp1=$(az network vnet-gateway show -n branchEastGW -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses[0]' -o tsv)
 pip1=$(az network vnet-gateway show -n branchEastGW -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].tunnelIpAddresses[0]' -o tsv)
-vwanbgp1=$(az network vpn-gateway show -n hubeastvpn23094989 -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses' -o tsv)
+vwanbgp1=$(az network vpn-gateway show -n hubeastvpn23094989 -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses[0]' -o tsv)
 vwanpip1=$(az network vpn-gateway show -n hubeastvpn23094989 -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].tunnelIpAddresses[0]' -o tsv)
 
-bgp2=$(az network vnet-gateway show -n branchWestGW -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses' -o tsv)
+prState=''
+rtState=''
+while [[ $prState != 'Succeeded' ]];
+do
+    prState=$(az network vhub show -g vwan-vpn -n hubwest --query 'provisioningState' -o tsv)
+    echo "hubwest provisioningState="$prState
+    sleep 5
+done
+
+while [[ $rtState != 'Provisioned' ]];
+do
+    rtState=$(az network vhub show -g vwan-vpn -n hubwest --query 'routingState' -o tsv)
+    echo "hubwest routingState="$rtState
+    sleep 5
+done
+
+prState=''
+while [[ $prState != 'Succeeded' ]];
+do
+    prState=$(az network vnet-gateway show -g vwan-vpn -n branchWestGW --query provisioningState -o tsv)
+    echo "branchWestGW provisioningState="$prState
+    sleep 5
+done
+
+bgp2=$(az network vnet-gateway show -n branchWestGW -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses[0]' -o tsv)
 pip2=$(az network vnet-gateway show -n branchWestGW -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].tunnelIpAddresses[0]' -o tsv)
-vwanbgp2=$(az network vpn-gateway show -n hubwesttvpn2349829 -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses' -o tsv)
+vwanbgp2=$(az network vpn-gateway show -n hubwesttvpn2349829 -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses[0]' -o tsv)
 vwanpip2=$(az network vpn-gateway show -n hubwesttvpn2349829 -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].tunnelIpAddresses[0]' -o tsv)
 
 # create virtual wan vpn site
@@ -64,4 +112,13 @@ az network vpn-connection create -n brancheasttositeeast -g $rg --vnet-gateway1 
 
 az network local-gateway create -g $rg -n site-west-LG --gateway-ip-address $vwanpip2 --asn 65515 --bgp-peering-address $vwanbgp2 -l $loc
 az network vpn-connection create -n branchwesttositewest -g $rg --vnet-gateway1 branchWestGW --local-gateway2 site-west-LG --enable-bgp --shared-key 'abc123'
+
+# create a VM in each branch spoke
+username="azureuser"
+password="MyP@ssword123"
+mypip=$(curl -4 ifconfig.io -s)
+az vm create -n branchEastVM  -g $rg --image ubuntults --public-ip-sku Standard --size Standard_D2S_v3 --subnet main --vnet-name branchEast --admin-username $username --admin-password $password
+az network nsg rule update -g $rg --nsg-name 'branchEastVMNSG' -n 'default-allow-ssh' --source-address-prefixes $mypip
+az vm create -n branchWestVM  -g $rg --image ubuntults --public-ip-sku Standard --size Standard_D2S_v3 --subnet main --vnet-name branchWest --admin-username $username --admin-password $password
+az network nsg rule update -g $rg --nsg-name 'branchEastVMNSG' -n 'default-allow-ssh' --source-address-prefixes $mypip
 
